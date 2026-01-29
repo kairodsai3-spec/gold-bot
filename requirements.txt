@@ -1,5 +1,6 @@
 pyTelegramBotAPI
 requests
 schedule
-yfinance
 flask
+beautifulsoup4
+urllib3
