@@ -1,92 +1,91 @@
 import telebot
 import requests
-from bs4 import BeautifulSoup
 import schedule
 import time
 import threading
 import os
-import urllib3
 from flask import Flask
-
-# ปิดแจ้งเตือนความปลอดภัย SSL (เพื่อให้ดึงข้อมูลได้ลื่นๆ)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- ตั้งค่า ---
 TOKEN = os.getenv('TELEGRAM_TOKEN')
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# --- หน้าเว็บหลอกๆ กันบอทหลับ ---
+# --- Web Server หลอกๆ (กัน Render หลับ) ---
 @app.route('/')
 def home():
-    return "Bot is watching Gold Prices..."
+    return "Bot is running with Binance API..."
 
 def run_web_server():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
-# --- ฟังก์ชันดึงข้อมูล (ดึงจากนำเชียง ทีเดียวจบ) ---
-def get_gold_data():
+# --- 1. ดึงทองไทย 96.5% (THB) ---
+def get_thai_gold():
     try:
-        url = "https://www.namchiang.com/th/"
-        # หลอกว่าเป็นคนเปิดเว็บ (ไม่ใช่บอท)
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        # API นี้ดึงจากสมาคมฯ มาแคชไว้ให้แล้ว (เสถียรมาก)
+        url = "https://api.chnwt.dev/thai-gold-api/latest"
+        response = requests.get(url, timeout=5)
+        data = response.json()
         
-        response = requests.get(url, headers=headers, timeout=10, verify=False)
-        
-        if response.status_code != 200:
-            return None
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-
-        # ดึงข้อมูลตาม ID หน้าเว็บเขา
-        data = {
-            "sell_965": soup.find(id='lblBLSell').text.strip(),
-            "buy_965": soup.find(id='lblBLBuy').text.strip(),
-            "sell_99": soup.find(id='lbl99Sell').text.strip(),
-            "buy_99": soup.find(id='lbl99Buy').text.strip(),
-            "gold_spot": soup.find(id='lblSpot').text.strip(), # นี่คือ Gold US ที่คุณอยากได้
-            "thb_usd": soup.find(id='lblUS').text.strip(),
-            "update_time": soup.find(id='lblTime').text.strip()
-        }
-        return data
-
+        if data['status'] == 'success':
+            return data['response']['price']['gold']
     except Exception as e:
-        print(f"Error scraping: {e}")
+        print(f"Thai API Error: {e}")
+    return None
+
+# --- 2. ดึงทองนอก 99.99% (USD) จาก Binance ---
+def get_spot_gold_binance():
+    try:
+        # ดึงราคา XAUUSDT (Gold Spot) จาก Binance Futures API
+        # ข้อดี: ฟรี, Real-time 100%, ไม่มีการบล็อก IP
+        url = "https://fapi.binance.com/fapi/v1/ticker/price?symbol=XAUUSDT"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        
+        # คืนค่าราคาเป็นตัวเลข (float)
+        return float(data['price'])
+    except Exception as e:
+        print(f"Binance API Error: {e}")
         return None
 
-# --- จัดหน้าตาข้อความ ---
+# --- สร้างข้อความ ---
 def get_message():
-    data = get_gold_data()
+    thai = get_thai_gold()
+    spot_usd = get_spot_gold_binance()
     
-    if not data:
-        return "⚠️ กำลังดึงข้อมูล... (ลองกดใหม่ใน 1 นาที)"
-
-    msg = (
-        f"📊 **ราคาทองคำ Real-Time** 🚀\n"
-        f"🕒 เวลา: {data['update_time']}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"🇹🇭 **ทองคำแท่ง 96.5% (บาท)**\n"
-        f"🔴 ขายออก: {data['sell_965']}\n"
-        f"🟢 รับซื้อ: {data['buy_965']}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"✨ **ทองคำ 99.99% (บาท)**\n"
-        f"🔴 ขายออก: {data['sell_99']}\n"
-        f"🟢 รับซื้อ: {data['buy_99']}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"🌎 **ตลาดโลก (Global)**\n"
-        f"🇺🇸 **Gold US:** {data['gold_spot']} USD\n" # ตรงนี้ครับ
-        f"💵 **Exchange:** {data['thb_usd']} THB/USD\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"(Data: Nam Chiang)"
-    )
+    msg = "📊 **ราคาทองคำ Real-Time** ⚡\n"
+    msg += "━━━━━━━━━━━━━━\n"
+    
+    # ส่วนที่ 1: ทองไทย (บาท)
+    if thai:
+        msg += "🇹🇭 **ทองไทย 96.5% (บาท)**\n"
+        msg += f"🔴 ขายออก: **{thai['sell']}**\n"
+        msg += f"🟢 รับซื้อ: **{thai['buy']}**\n"
+    else:
+        msg += "🇹🇭 ทองไทย: (เชื่อมต่อไม่ได้)\n"
+        
+    msg += "━━━━━━━━━━━━━━\n"
+    
+    # ส่วนที่ 2: ทองนอก (USD)
+    if spot_usd:
+        msg += "🌎 **ทองคำโลก 99.99% (Spot)**\n"
+        msg += f"🇺🇸 **XAU/USD:** ${spot_usd:,.2f}\n"
+        # (แถม) แปลงเป็นบาทคร่าวๆ (สมมติเรท 35.5 หรือดึงเพิ่มก็ได้)
+        # แต่นี้เอาแค่ USD ตามโจทย์
+    else:
+        msg += "🌎 ทองโลก: (เชื่อมต่อไม่ได้)\n"
+    
+    msg += "━━━━━━━━━━━━━━\n"
+    msg += "(Source: Binance API & Thai Gold API)"
+    
     return msg
 
-# --- ส่วนบอท ---
+# --- คำสั่ง Bot ---
 @bot.message_handler(commands=['start', 'gold'])
 def send_gold(message):
     bot.reply_to(message, get_message())
 
-# --- ตั้งเวลาแจ้งเตือน ---
+# --- ตั้งเวลาส่ง ---
 def run_schedule():
     target_chat_id = os.getenv('TELEGRAM_CHAT_ID')
     
@@ -94,7 +93,8 @@ def run_schedule():
         if target_chat_id:
             bot.send_message(target_chat_id, get_message())
             
-    schedule.every().day.at("09:35").do(job)
+    # ตั้งเวลาตามต้องการ
+    schedule.every().day.at("09:30").do(job)
     schedule.every().day.at("14:00").do(job)
     
     while True:
@@ -102,12 +102,11 @@ def run_schedule():
         time.sleep(1)
 
 if __name__ == "__main__":
-    # รัน 2 ระบบพร้อมกัน
     t_web = threading.Thread(target=run_web_server)
     t_web.start()
     
     t_sched = threading.Thread(target=run_schedule)
     t_sched.start()
     
-    print("🚀 Gold Bot (Nam Chiang Edition) Started!")
+    print("🚀 Bot Started (Binance Edition)!")
     bot.infinity_polling()
