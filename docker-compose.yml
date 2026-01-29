@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  gold-bot:
+    build: .             # บอกให้ "สร้าง" จากโฟลเดอร์ปัจจุบัน (ไม่ต้องไปดึง Image คนอื่น)
+    container_name: my-gold-bot
+    restart: always      # ถ้าบอทตาย ให้ชุบชีวิตขึ้นมาใหม่
+    environment:
+      # 👇 เอา Token และ Chat ID ที่เตรียมไว้ มาใส่ตรงนี้ครับ
+      TELEGRAM_TOKEN: '8599862112:AAEDAQ3cSIhVyKSX8qGeBLkKA5XDxmEWsy4'
+      TELEGRAM_CHAT_ID: '7628151103'
