@@ -1,119 +1,113 @@
 import telebot
 import requests
-import yfinance as yf
+from bs4 import BeautifulSoup
 import schedule
 import time
 import threading
 import os
+import urllib3
 from flask import Flask
 
-# --- ส่วนตั้งค่า ---
+# ปิดแจ้งเตือนความปลอดภัย SSL (เพื่อให้ดึงข้อมูลได้ลื่นๆ)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# --- ตั้งค่า ---
 TOKEN = os.getenv('TELEGRAM_TOKEN')
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# --- ส่วนหน้าเว็บปลอมๆ ---
+# --- หน้าเว็บหลอกๆ กันบอทหลับ ---
 @app.route('/')
 def home():
-    return "I am alive! (Bot is running)"
+    return "Bot is watching Gold Prices..."
 
 def run_web_server():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
-# --- ฟังก์ชันแยกส่วน (Safe Mode) ---
-
-def get_thai_gold():
+# --- ฟังก์ชันดึงข้อมูล (ดึงจากนำเชียง ทีเดียวจบ) ---
+def get_gold_data():
     try:
-        url = "https://api.chnwt.dev/thai-gold-api/latest"
-        r = requests.get(url, timeout=5).json() # ลด timeout เหลือ 5 วิ
-        if r['status'] == 'success':
-            return r['response']['price']['gold']
-    except Exception as e:
-        print(f"Thai Gold Error: {e}")
-    return None
-
-def get_world_gold():
-    try:
-        # ใช้ yfinance แบบระบุ session (แก้ทาง Yahoo บล็อก)
-        # แต่ถ้ายังโดนบล็อก จะคืนค่า None แทนที่จะ Error
-        ticker = yf.Ticker("XAUUSD=X")
-        spot = ticker.history(period="1d")
+        url = "https://www.namchiang.com/th/"
+        # หลอกว่าเป็นคนเปิดเว็บ (ไม่ใช่บอท)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
         
-        if not spot.empty:
-            return spot['Close'].iloc[-1]
-    except Exception as e:
-        print(f"World Gold Error: {e}")
-    return None
+        response = requests.get(url, headers=headers, timeout=10, verify=False)
+        
+        if response.status_code != 200:
+            return None
 
-def get_thb_rate():
-    try:
-        ticker = yf.Ticker("THB=X")
-        data = ticker.history(period="1d")
-        if not data.empty:
-            return data['Close'].iloc[-1]
-    except:
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # ดึงข้อมูลตาม ID หน้าเว็บเขา
+        data = {
+            "sell_965": soup.find(id='lblBLSell').text.strip(),
+            "buy_965": soup.find(id='lblBLBuy').text.strip(),
+            "sell_99": soup.find(id='lbl99Sell').text.strip(),
+            "buy_99": soup.find(id='lbl99Buy').text.strip(),
+            "gold_spot": soup.find(id='lblSpot').text.strip(), # นี่คือ Gold US ที่คุณอยากได้
+            "thb_usd": soup.find(id='lblUS').text.strip(),
+            "update_time": soup.find(id='lblTime').text.strip()
+        }
+        return data
+
+    except Exception as e:
+        print(f"Error scraping: {e}")
         return None
 
-# --- ฟังก์ชันรวมร่าง (The Avenger) ---
-def get_final_message():
-    thai = get_thai_gold()
-    spot = get_world_gold()
-    thb = get_thb_rate()
+# --- จัดหน้าตาข้อความ ---
+def get_message():
+    data = get_gold_data()
     
-    # ถ้าพังทุกอย่าง
-    if not thai and not spot:
-        return "⚠️ ระบบต้นทางล่มชั่วคราวครับ (รอสักครู่)"
+    if not data:
+        return "⚠️ กำลังดึงข้อมูล... (ลองกดใหม่ใน 1 นาที)"
 
-    msg = "📊 **ราคาทองคำล่าสุด** 🚀\n━━━━━━━━━━━━━━\n"
-    
-    # 1. แสดงทองไทย (ถ้ามี)
-    if thai:
-        msg += f"🇹🇭 **ทองคำไทย 96.5%**\n"
-        msg += f"🔴 ขายออก: {thai['sell']}\n"
-        msg += f"🟢 รับซื้อ: {thai['buy']}\n"
-    else:
-        msg += "🇹🇭 ทองไทย: (เชื่อมต่อไม่ได้)\n"
-    
-    msg += "━━━━━━━━━━━━━━\n"
-
-    # 2. แสดงตลาดโลก (ถ้ามี)
-    if spot and thb:
-        msg += f"🌎 **Market Real-time**\n"
-        msg += f"🇺🇸 Gold Spot: ${spot:,.2f}\n"
-        msg += f"💵 USD/THB: {thb:.2f} B\n"
-    else:
-        msg += "🌎 ตลาดโลก: (Yahoo บล็อก IP)\n"
-        
+    msg = (
+        f"📊 **ราคาทองคำ Real-Time** 🚀\n"
+        f"🕒 เวลา: {data['update_time']}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🇹🇭 **ทองคำแท่ง 96.5% (บาท)**\n"
+        f"🔴 ขายออก: {data['sell_965']}\n"
+        f"🟢 รับซื้อ: {data['buy_965']}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"✨ **ทองคำ 99.99% (บาท)**\n"
+        f"🔴 ขายออก: {data['sell_99']}\n"
+        f"🟢 รับซื้อ: {data['buy_99']}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🌎 **ตลาดโลก (Global)**\n"
+        f"🇺🇸 **Gold US:** {data['gold_spot']} USD\n" # ตรงนี้ครับ
+        f"💵 **Exchange:** {data['thb_usd']} THB/USD\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"(Data: Nam Chiang)"
+    )
     return msg
 
-# --- คำสั่ง Chat ---
+# --- ส่วนบอท ---
 @bot.message_handler(commands=['start', 'gold'])
 def send_gold(message):
-    bot.reply_to(message, get_final_message())
+    bot.reply_to(message, get_message())
 
-# --- Schedule ---
+# --- ตั้งเวลาแจ้งเตือน ---
 def run_schedule():
-    # ส่งเข้ากลุ่มตามเวลา (ใส่ Chat ID ใน Render หรือยัง?)
     target_chat_id = os.getenv('TELEGRAM_CHAT_ID')
     
     def job():
         if target_chat_id:
-            bot.send_message(target_chat_id, get_final_message())
+            bot.send_message(target_chat_id, get_message())
             
-    schedule.every().day.at("09:30").do(job)
-    schedule.every().day.at("13:00").do(job)
-    schedule.every().day.at("16:30").do(job)
+    schedule.every().day.at("09:35").do(job)
+    schedule.every().day.at("14:00").do(job)
     
     while True:
         schedule.run_pending()
         time.sleep(1)
 
 if __name__ == "__main__":
+    # รัน 2 ระบบพร้อมกัน
     t_web = threading.Thread(target=run_web_server)
     t_web.start()
     
     t_sched = threading.Thread(target=run_schedule)
     t_sched.start()
     
-    print("🚀 Bot Started (Robust Mode)!")
+    print("🚀 Gold Bot (Nam Chiang Edition) Started!")
     bot.infinity_polling()
