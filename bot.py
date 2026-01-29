@@ -6,59 +6,81 @@ import threading
 import os
 from flask import Flask
 
-# --- ตั้งค่า ---
+# --- ส่วนตั้งค่า (Config) ---
 TOKEN = os.getenv('TELEGRAM_TOKEN')
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# --- Web Server หลอกๆ (กัน Render หลับ) ---
+# --- Web Server (สำหรับ UptimeRobot) ---
 @app.route('/')
 def home():
-    return "Bot is running with Binance API..."
+    return "✅ Bot is Online! (Binance US + Thai Gold)"
 
 def run_web_server():
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
 
-# --- 1. ดึงทองไทย 96.5% (THB) ---
+# --- 1. ฟังก์ชันดึงทองไทย (96.5%) ---
 def get_thai_gold():
     try:
-        # API นี้ดึงจากสมาคมฯ มาแคชไว้ให้แล้ว (เสถียรมาก)
+        # API ของสมาคมฯ (ผ่าน chnwt)
         url = "https://api.chnwt.dev/thai-gold-api/latest"
-        response = requests.get(url, timeout=5)
+        response = requests.get(url, timeout=10)
         data = response.json()
         
         if data['status'] == 'success':
-            return data['response']['price']['gold']
+            price = data['response']['price']['gold']
+            # เช็คว่าเป็นตัวเลขไหม ถ้าไม่มีให้คืนค่าเดิม
+            return {
+                "sell": price['sell'],
+                "buy": price['buy'],
+                "date": data['response']['date'],
+                "time": data['response']['update_time']
+            }
     except Exception as e:
-        print(f"Thai API Error: {e}")
+        print(f"Thai Gold Error: {e}")
     return None
 
-# --- 2. ดึงทองนอก 99.99% (USD) จาก Binance ---
-def get_spot_gold_binance():
+# --- 2. ฟังก์ชันดึงทองนอก (99.99%) USD ---
+# ใช้ Binance US หรือ CoinGecko เพราะ Server Render อยู่เมกา
+def get_world_gold():
+    price = None
+    
+    # ทางเลือกที่ A: Binance US (ดูเหรียญ PAXG ซึ่งราคา = ทองคำ 1 oz)
     try:
-        # ดึงราคา XAUUSDT (Gold Spot) จาก Binance Futures API
-        # ข้อดี: ฟรี, Real-time 100%, ไม่มีการบล็อก IP
-        url = "https://fapi.binance.com/fapi/v1/ticker/price?symbol=XAUUSDT"
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        
-        # คืนค่าราคาเป็นตัวเลข (float)
-        return float(data['price'])
+        url = "https://api.binance.us/api/v3/ticker/price?symbol=PAXGUSD"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(url, headers=headers, timeout=5)
+        if r.status_code == 200:
+            price = float(r.json()['price'])
     except Exception as e:
-        print(f"Binance API Error: {e}")
-        return None
+        print(f"Binance US Error: {e}")
 
-# --- สร้างข้อความ ---
-def get_message():
+    # ทางเลือกที่ B: CoinGecko (ถ้า Binance พัง ให้ใช้ตัวนี้แทน)
+    if price is None:
+        try:
+            url = "https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            r = requests.get(url, headers=headers, timeout=5)
+            if r.status_code == 200:
+                price = r.json()['pax-gold']['usd']
+        except Exception as e:
+            print(f"CoinGecko Error: {e}")
+            
+    return price
+
+# --- รวมข้อความเพื่อส่ง ---
+def get_final_message():
     thai = get_thai_gold()
-    spot_usd = get_spot_gold_binance()
+    world_price = get_world_gold()
     
     msg = "📊 **ราคาทองคำ Real-Time** ⚡\n"
     msg += "━━━━━━━━━━━━━━\n"
     
-    # ส่วนที่ 1: ทองไทย (บาท)
+    # ส่วนทองไทย
     if thai:
-        msg += "🇹🇭 **ทองไทย 96.5% (บาท)**\n"
+        msg += f"🇹🇭 **ทองไทย 96.5% (บาท)**\n"
+        msg += f"🗓 {thai['date']} | 🕒 {thai['time']}\n"
         msg += f"🔴 ขายออก: **{thai['sell']}**\n"
         msg += f"🟢 รับซื้อ: **{thai['buy']}**\n"
     else:
@@ -66,47 +88,58 @@ def get_message():
         
     msg += "━━━━━━━━━━━━━━\n"
     
-    # ส่วนที่ 2: ทองนอก (USD)
-    if spot_usd:
-        msg += "🌎 **ทองคำโลก 99.99% (Spot)**\n"
-        msg += f"🇺🇸 **XAU/USD:** ${spot_usd:,.2f}\n"
-        # (แถม) แปลงเป็นบาทคร่าวๆ (สมมติเรท 35.5 หรือดึงเพิ่มก็ได้)
-        # แต่นี้เอาแค่ USD ตามโจทย์
+    # ส่วนทองนอก
+    if world_price:
+        msg += f"🌎 **ทองคำโลก 99.99% (Spot)**\n"
+        msg += f"🇺🇸 **XAU/USD:** ${world_price:,.2f}\n"
     else:
         msg += "🌎 ทองโลก: (เชื่อมต่อไม่ได้)\n"
     
     msg += "━━━━━━━━━━━━━━\n"
-    msg += "(Source: Binance API & Thai Gold API)"
+    msg += "DATA: Gold Traders Assoc. & Binance US"
     
     return msg
 
-# --- คำสั่ง Bot ---
+# --- คำสั่ง Telegram ---
 @bot.message_handler(commands=['start', 'gold'])
 def send_gold(message):
-    bot.reply_to(message, get_message())
+    bot.reply_to(message, "🔍 กำลังดึงข้อมูล...")
+    try:
+        text = get_final_message()
+        # ลบข้อความเก่าแล้วส่งใหม่ หรือแก้ไขข้อความเดิมก็ได้ (ที่นี้ส่งใหม่)
+        bot.send_message(message.chat.id, text, parse_mode='Markdown')
+    except Exception as e:
+        bot.send_message(message.chat.id, "เกิดข้อผิดพลาดในการส่งข้อมูล")
 
-# --- ตั้งเวลาส่ง ---
+# --- ตั้งเวลาแจ้งเตือนอัตโนมัติ ---
 def run_schedule():
     target_chat_id = os.getenv('TELEGRAM_CHAT_ID')
     
     def job():
         if target_chat_id:
-            bot.send_message(target_chat_id, get_message())
-            
-    # ตั้งเวลาตามต้องการ
+            try:
+                bot.send_message(target_chat_id, get_final_message(), parse_mode='Markdown')
+            except Exception as e:
+                print(f"Schedule Error: {e}")
+
+    # ตั้งเวลาส่ง (เปลี่ยนเวลาตรงนี้ได้)
     schedule.every().day.at("09:30").do(job)
     schedule.every().day.at("14:00").do(job)
+    schedule.every().day.at("16:00").do(job)
     
     while True:
         schedule.run_pending()
         time.sleep(1)
 
+# --- Main Loop ---
 if __name__ == "__main__":
+    # รัน Web Server (เพื่อให้ Render ไม่หลับ)
     t_web = threading.Thread(target=run_web_server)
     t_web.start()
     
+    # รัน Scheduler (ตัวจับเวลา)
     t_sched = threading.Thread(target=run_schedule)
     t_sched.start()
     
-    print("🚀 Bot Started (Binance Edition)!")
+    print("🚀 Bot Started Successfully!")
     bot.infinity_polling()
