@@ -1,4 +1,3 @@
-Plaintext
 pyTelegramBotAPI
 requests
 schedule
