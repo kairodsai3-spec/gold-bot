@@ -4,7 +4,6 @@ import time
 import threading
 import os
 import pandas as pd
-import pandas_ta as ta
 import yfinance as yf
 from flask import Flask
 
@@ -14,109 +13,116 @@ CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# --- Web Server (สำหรับ UptimeRobot) ---
+# --- Web Server ---
 @app.route('/')
 def home():
-    return "✅ Gold RSI Bot is Running..."
+    return "✅ Gold Bot (Manual RSI) is Running..."
 
 def run_web_server():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- ฟังก์ชันคำนวณ RSI (หัวใจสำคัญ) ---
+# --- ฟังก์ชันคำนวณ RSI (สูตรคณิตศาสตร์) ---
+# เราเขียนเอง ไม่ง้อ pandas_ta แล้ว เพื่อแก้ปัญหา Error 404
+def calculate_rsi(df, period=14):
+    # หาความเปลี่ยนแปลงของราคา
+    delta = df['Close'].diff()
+    
+    # แยกขาขึ้น (Gain) และขาลง (Loss)
+    gain = (delta.where(delta > 0, 0))
+    loss = (-delta.where(delta < 0, 0))
+
+    # คำนวณค่าเฉลี่ยแบบ Exponential (Wilder's Smoothing) ให้เหมือน TradingView
+    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+
+    # คำนวณ RS และ RSI
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+# --- ฟังก์ชันดึงข้อมูลและวิเคราะห์ ---
 def get_technical_analysis():
     try:
-        # ดึงข้อมูลทองคำ Gold Futures (GC=F) ย้อนหลัง 5 วัน ราย 15 นาที
-        # ใช้ yfinance แทน ccxt เพื่อหนีการโดนบล็อก IP
+        # ดึงกราฟทองคำ (GC=F) ย้อนหลัง 5 วัน แท่งละ 15 นาที
         df = yf.download("GC=F", period="5d", interval="15m", progress=False)
         
-        if df.empty:
+        if df.empty or len(df) < 15:
             return None, None
 
-        # คำนวณ RSI (14) ด้วย pandas_ta (เหมือนโค้ดที่คุณให้มา)
-        df.ta.rsi(length=14, append=True)
+        # เรียกใช้สูตรคำนวณ RSI ที่เราเขียนเอง
+        df['RSI'] = calculate_rsi(df)
         
-        last_price = df['Close'].iloc[-1].item() # ราคาปิดล่าสุด
-        last_rsi = df['RSI_14'].iloc[-1].item()   # ค่า RSI ล่าสุด
+        # เอาค่าล่าสุด
+        last_price = float(df['Close'].iloc[-1])
+        last_rsi = float(df['RSI'].iloc[-1])
 
         return last_price, last_rsi
     except Exception as e:
-        print(f"Error Calculating RSI: {e}")
+        print(f"Error: {e}")
         return None, None
 
-# --- ฟังก์ชันข้อความสวยๆ ---
+# --- จัดรูปแบบข้อความ ---
 def format_message(price, rsi, alert_type=None):
     msg = ""
     if alert_type == "HIGH":
-        msg += "🔥 **แจ้งเตือน: RSI สูงผิดปกติ!** 🔥\n"
-        msg += "⚠️ ระวังแรงเทขาย (Overbought)\n"
+        msg += "🔥 **แจ้งเตือน: RSI สูง (Overbought)** 🔥\n"
+        msg += "⚠️ ระวังแรงเทขาย\n"
     elif alert_type == "LOW":
-        msg += "⚡ **แจ้งเตือน: RSI ต่ำน่าซื้อ!** ⚡\n"
-        msg += "✅ จังหวะช้อนซื้อ (Oversold)\n"
+        msg += "⚡ **แจ้งเตือน: RSI ต่ำ (Oversold)** ⚡\n"
+        msg += "✅ จังหวะน่าเข้าซื้อ\n"
     else:
-        msg += "📊 **สถานะตลาดปัจจุบัน**\n"
+        msg += "📊 **สถานะทองคำล่าสุด**\n"
 
     msg += "━━━━━━━━━━━━━━\n"
     msg += f"💰 ราคา: **${price:,.2f}**\n"
     msg += f"📈 RSI (15m): **{rsi:.2f}**\n"
     
-    # คำแนะนำตาม RSI
-    if rsi >= 70:
-        msg += "🚩 Status: **Overbought (แพงไป)**"
-    elif rsi <= 30:
-        msg += "🚩 Status: **Oversold (ถูกมาก)**"
-    else:
-        msg += "⚖️ Status: Neutral (ปกติ)"
+    if rsi >= 70: msg += "🚩 สถานะ: แพงเกินไป (ระวังดอย)"
+    elif rsi <= 30: msg += "🚩 สถานะ: ถูกมาก (ของดีราคาถูก)"
+    else: msg += "⚖️ สถานะ: ทั่วไป (Neutral)"
         
     return msg
 
-# --- บอทเฝ้าระวัง (Watchdog) ---
+# --- ระบบเฝ้าระวัง ---
 def run_watchdog():
-    print("👀 เริ่มต้นระบบเฝ้าระวัง RSI...")
+    print("👀 Watchdog Started...")
     while True:
         try:
             price, rsi = get_technical_analysis()
-            
             if price and rsi:
-                print(f"Check: Price={price:.1f}, RSI={rsi:.1f}")
+                print(f"Monitor: ${price:.2f} | RSI: {rsi:.2f}")
                 
-                # เงื่อนไขแจ้งเตือน (RSI > 70 หรือ < 30)
-                # เช็คว่ามี Chat ID ไหม ถ้ามีให้ส่ง
                 if CHAT_ID:
                     if rsi >= 70:
                         bot.send_message(CHAT_ID, format_message(price, rsi, "HIGH"), parse_mode='Markdown')
-                        time.sleep(900) # ถ้าเตือนแล้ว ให้พัก 15 นาที (กันรัว)
+                        time.sleep(900) # พัก 15 นาที
                     elif rsi <= 30:
                         bot.send_message(CHAT_ID, format_message(price, rsi, "LOW"), parse_mode='Markdown')
-                        time.sleep(900) # ถ้าเตือนแล้ว ให้พัก 15 นาที
+                        time.sleep(900)
             
-            # ตรวจสอบทุกๆ 1 นาที
-            time.sleep(60) 
-            
+            time.sleep(60) # ตรวจทุก 1 นาที
         except Exception as e:
             print(f"Watchdog Error: {e}")
             time.sleep(60)
 
-# --- คำสั่งเช็คสถานะเอง ---
+# --- คำสั่ง Telegram ---
 @bot.message_handler(commands=['start', 'check', 'rsi'])
 def send_status(message):
-    bot.reply_to(message, "🔄 กำลังวิเคราะห์กราฟ...")
+    bot.reply_to(message, "🔄 กำลังคำนวณ RSI...")
     price, rsi = get_technical_analysis()
-    
     if price:
-        bot.reply_to(message, format_message(price, rsi), parse_mode='Markdown')
+        bot.send_message(message.chat.id, format_message(price, rsi), parse_mode='Markdown')
     else:
-        bot.reply_to(message, "❌ ดึงข้อมูลกราฟไม่ได้ ลองใหม่แป๊บหนึ่งครับ")
+        bot.send_message(message.chat.id, "❌ ไม่สามารถดึงข้อมูลได้ขณะนี้")
 
 # --- Main ---
 if __name__ == "__main__":
-    # 1. รัน Web Server กันหลับ
     t_web = threading.Thread(target=run_web_server)
     t_web.start()
     
-    # 2. รันระบบเฝ้าระวัง (Loop ตรวจจับ RSI)
     t_watch = threading.Thread(target=run_watchdog)
     t_watch.start()
     
-    print("🚀 Hybrid Bot (RSI Alert) Started!")
+    print("🚀 Gold Bot (Native Calculation) Started!")
     bot.infinity_polling()
