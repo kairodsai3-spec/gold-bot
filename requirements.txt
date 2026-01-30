@@ -4,3 +4,4 @@ schedule
 flask
 pandas
 yfinance
+matplotlib
