@@ -3,5 +3,5 @@ requests
 schedule
 flask
 pandas
-pandas_ta
 yfinance
+https://github.com/twopirllc/pandas-ta/archive/development.zip
