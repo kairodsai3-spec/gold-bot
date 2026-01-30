@@ -1,145 +1,122 @@
 import telebot
 import requests
-import schedule
 import time
 import threading
 import os
+import pandas as pd
+import pandas_ta as ta
+import yfinance as yf
 from flask import Flask
 
-# --- ส่วนตั้งค่า (Config) ---
+# --- ตั้งค่า (Config) ---
 TOKEN = os.getenv('TELEGRAM_TOKEN')
+CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
 # --- Web Server (สำหรับ UptimeRobot) ---
 @app.route('/')
 def home():
-    return "✅ Bot is Online! (Binance US + Thai Gold)"
+    return "✅ Gold RSI Bot is Running..."
 
 def run_web_server():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- 1. ฟังก์ชันดึงทองไทย (96.5%) ---
-def get_thai_gold():
+# --- ฟังก์ชันคำนวณ RSI (หัวใจสำคัญ) ---
+def get_technical_analysis():
     try:
-        # API ของสมาคมฯ (ผ่าน chnwt)
-        url = "https://api.chnwt.dev/thai-gold-api/latest"
-        response = requests.get(url, timeout=10)
-        data = response.json()
+        # ดึงข้อมูลทองคำ Gold Futures (GC=F) ย้อนหลัง 5 วัน ราย 15 นาที
+        # ใช้ yfinance แทน ccxt เพื่อหนีการโดนบล็อก IP
+        df = yf.download("GC=F", period="5d", interval="15m", progress=False)
         
-        if data['status'] == 'success':
-            price = data['response']['price']['gold']
-            # เช็คว่าเป็นตัวเลขไหม ถ้าไม่มีให้คืนค่าเดิม
-            return {
-                "sell": price['sell'],
-                "buy": price['buy'],
-                "date": data['response']['date'],
-                "time": data['response']['update_time']
-            }
-    except Exception as e:
-        print(f"Thai Gold Error: {e}")
-    return None
+        if df.empty:
+            return None, None
 
-# --- 2. ฟังก์ชันดึงทองนอก (99.99%) USD ---
-# ใช้ Binance US หรือ CoinGecko เพราะ Server Render อยู่เมกา
-def get_world_gold():
-    price = None
-    
-    # ทางเลือกที่ A: Binance US (ดูเหรียญ PAXG ซึ่งราคา = ทองคำ 1 oz)
-    try:
-        url = "https://api.binance.us/api/v3/ticker/price?symbol=PAXGUSD"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(url, headers=headers, timeout=5)
-        if r.status_code == 200:
-            price = float(r.json()['price'])
-    except Exception as e:
-        print(f"Binance US Error: {e}")
-
-    # ทางเลือกที่ B: CoinGecko (ถ้า Binance พัง ให้ใช้ตัวนี้แทน)
-    if price is None:
-        try:
-            url = "https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            r = requests.get(url, headers=headers, timeout=5)
-            if r.status_code == 200:
-                price = r.json()['pax-gold']['usd']
-        except Exception as e:
-            print(f"CoinGecko Error: {e}")
-            
-    return price
-
-# --- รวมข้อความเพื่อส่ง ---
-def get_final_message():
-    thai = get_thai_gold()
-    world_price = get_world_gold()
-    
-    msg = "📊 **ราคาทองคำ Real-Time** ⚡\n"
-    msg += "━━━━━━━━━━━━━━\n"
-    
-    # ส่วนทองไทย
-    if thai:
-        msg += f"🇹🇭 **ทองไทย 96.5% (บาท)**\n"
-        msg += f"🗓 {thai['date']} | 🕒 {thai['time']}\n"
-        msg += f"🔴 ขายออก: **{thai['sell']}**\n"
-        msg += f"🟢 รับซื้อ: **{thai['buy']}**\n"
-    else:
-        msg += "🇹🇭 ทองไทย: (เชื่อมต่อไม่ได้)\n"
+        # คำนวณ RSI (14) ด้วย pandas_ta (เหมือนโค้ดที่คุณให้มา)
+        df.ta.rsi(length=14, append=True)
         
-    msg += "━━━━━━━━━━━━━━\n"
-    
-    # ส่วนทองนอก
-    if world_price:
-        msg += f"🌎 **ทองคำโลก 99.99% (Spot)**\n"
-        msg += f"🇺🇸 **XAU/USD:** ${world_price:,.2f}\n"
+        last_price = df['Close'].iloc[-1].item() # ราคาปิดล่าสุด
+        last_rsi = df['RSI_14'].iloc[-1].item()   # ค่า RSI ล่าสุด
+
+        return last_price, last_rsi
+    except Exception as e:
+        print(f"Error Calculating RSI: {e}")
+        return None, None
+
+# --- ฟังก์ชันข้อความสวยๆ ---
+def format_message(price, rsi, alert_type=None):
+    msg = ""
+    if alert_type == "HIGH":
+        msg += "🔥 **แจ้งเตือน: RSI สูงผิดปกติ!** 🔥\n"
+        msg += "⚠️ ระวังแรงเทขาย (Overbought)\n"
+    elif alert_type == "LOW":
+        msg += "⚡ **แจ้งเตือน: RSI ต่ำน่าซื้อ!** ⚡\n"
+        msg += "✅ จังหวะช้อนซื้อ (Oversold)\n"
     else:
-        msg += "🌎 ทองโลก: (เชื่อมต่อไม่ได้)\n"
-    
+        msg += "📊 **สถานะตลาดปัจจุบัน**\n"
+
     msg += "━━━━━━━━━━━━━━\n"
-    msg += "DATA: Gold Traders Assoc. & Binance US"
+    msg += f"💰 ราคา: **${price:,.2f}**\n"
+    msg += f"📈 RSI (15m): **{rsi:.2f}**\n"
     
+    # คำแนะนำตาม RSI
+    if rsi >= 70:
+        msg += "🚩 Status: **Overbought (แพงไป)**"
+    elif rsi <= 30:
+        msg += "🚩 Status: **Oversold (ถูกมาก)**"
+    else:
+        msg += "⚖️ Status: Neutral (ปกติ)"
+        
     return msg
 
-# --- คำสั่ง Telegram ---
-@bot.message_handler(commands=['start', 'gold'])
-def send_gold(message):
-    bot.reply_to(message, "🔍 กำลังดึงข้อมูล...")
-    try:
-        text = get_final_message()
-        # ลบข้อความเก่าแล้วส่งใหม่ หรือแก้ไขข้อความเดิมก็ได้ (ที่นี้ส่งใหม่)
-        bot.send_message(message.chat.id, text, parse_mode='Markdown')
-    except Exception as e:
-        bot.send_message(message.chat.id, "เกิดข้อผิดพลาดในการส่งข้อมูล")
-
-# --- ตั้งเวลาแจ้งเตือนอัตโนมัติ ---
-def run_schedule():
-    target_chat_id = os.getenv('TELEGRAM_CHAT_ID')
-    
-    def job():
-        if target_chat_id:
-            try:
-                bot.send_message(target_chat_id, get_final_message(), parse_mode='Markdown')
-            except Exception as e:
-                print(f"Schedule Error: {e}")
-
-    # ตั้งเวลาส่ง (เปลี่ยนเวลาตรงนี้ได้)
-    schedule.every().day.at("09:30").do(job)
-    schedule.every().day.at("14:00").do(job)
-    schedule.every().day.at("16:00").do(job)
-    
+# --- บอทเฝ้าระวัง (Watchdog) ---
+def run_watchdog():
+    print("👀 เริ่มต้นระบบเฝ้าระวัง RSI...")
     while True:
-        schedule.run_pending()
-        time.sleep(1)
+        try:
+            price, rsi = get_technical_analysis()
+            
+            if price and rsi:
+                print(f"Check: Price={price:.1f}, RSI={rsi:.1f}")
+                
+                # เงื่อนไขแจ้งเตือน (RSI > 70 หรือ < 30)
+                # เช็คว่ามี Chat ID ไหม ถ้ามีให้ส่ง
+                if CHAT_ID:
+                    if rsi >= 70:
+                        bot.send_message(CHAT_ID, format_message(price, rsi, "HIGH"), parse_mode='Markdown')
+                        time.sleep(900) # ถ้าเตือนแล้ว ให้พัก 15 นาที (กันรัว)
+                    elif rsi <= 30:
+                        bot.send_message(CHAT_ID, format_message(price, rsi, "LOW"), parse_mode='Markdown')
+                        time.sleep(900) # ถ้าเตือนแล้ว ให้พัก 15 นาที
+            
+            # ตรวจสอบทุกๆ 1 นาที
+            time.sleep(60) 
+            
+        except Exception as e:
+            print(f"Watchdog Error: {e}")
+            time.sleep(60)
 
-# --- Main Loop ---
+# --- คำสั่งเช็คสถานะเอง ---
+@bot.message_handler(commands=['start', 'check', 'rsi'])
+def send_status(message):
+    bot.reply_to(message, "🔄 กำลังวิเคราะห์กราฟ...")
+    price, rsi = get_technical_analysis()
+    
+    if price:
+        bot.reply_to(message, format_message(price, rsi), parse_mode='Markdown')
+    else:
+        bot.reply_to(message, "❌ ดึงข้อมูลกราฟไม่ได้ ลองใหม่แป๊บหนึ่งครับ")
+
+# --- Main ---
 if __name__ == "__main__":
-    # รัน Web Server (เพื่อให้ Render ไม่หลับ)
+    # 1. รัน Web Server กันหลับ
     t_web = threading.Thread(target=run_web_server)
     t_web.start()
     
-    # รัน Scheduler (ตัวจับเวลา)
-    t_sched = threading.Thread(target=run_schedule)
-    t_sched.start()
+    # 2. รันระบบเฝ้าระวัง (Loop ตรวจจับ RSI)
+    t_watch = threading.Thread(target=run_watchdog)
+    t_watch.start()
     
-    print("🚀 Bot Started Successfully!")
+    print("🚀 Hybrid Bot (RSI Alert) Started!")
     bot.infinity_polling()
