@@ -1,69 +1,81 @@
 import ccxt
 import time
 import requests
-from bs4 import BeautifulSoup
 import os
-
-# ... (ส่วนตั้งค่า Binance API ของเดิมของคุณ เก็บไว้เหมือนเดิม) ...
-# exchange = ccxt.binance(...) 
+from bs4 import BeautifulSoup
+from flask import Flask
+from threading import Thread
 
 # ==========================================
-# 🔴 ฟังก์ชั่นดึงราคาจาก Investing.com (Thai)
+# 🟢 ส่วนที่ 1: สร้าง Web Server หลอกๆ (ให้ Render เห็น)
+# ==========================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "I am alive! Robot is running..."
+
+def run_web_server():
+    # Render จะส่งค่า PORT มาให้ทาง Environment Variable
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
+
+# ==========================================
+# 🔴 ส่วนที่ 2: ฟังก์ชั่นดึงราคา & บอท (ของคุณเดิม)
 # ==========================================
 def get_investing_price():
     url = "https://th.investing.com/currencies/xau-usd"
-    # ต้องปลอมตัวเป็น Browser คนจริง เพื่อไม่ให้เว็บกันบอท
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-
     try:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             soup = BeautifulSoup(response.content, "html.parser")
-            
-            # หาตัวเลขราคา (Class นี้แม่นยำที่สุดสำหรับ Investing.com ปัจจุบัน)
             price_tag = soup.find("div", {"data-test": "instrument-price-last"})
-            
             if price_tag:
-                # แปลงข้อความ "2,735.50" ให้เป็นตัวเลข 2735.50
-                price_text = price_tag.text.strip().replace(',', '')
-                return float(price_text)
+                return float(price_tag.text.strip().replace(',', ''))
     except Exception as e:
         print(f"⚠️ ดึงราคา Investing ไม่ได้: {e}")
-    
     return None
 
-# ==========================================
-# 🔄 Loop การทำงานหลัก (Main Loop)
-# ==========================================
-def run_bot():
-    print("🚀 Bot Started: ใช้ราคาจาก Investing.com...")
+def place_smart_tp(exchange, symbol, entry_price, position_size, side='sell'):
+    # ... (วางโค้ดฟังก์ชั่น TP ของคุณตรงนี้ หรือใช้ของเดิมที่ผมเคยให้) ...
+    pass 
+
+def run_bot_logic():
+    print("🚀 Bot Started: พร้อมเทรดแล้ว...")
+    
+    # ใส่ API Key ของคุณที่นี่ (หรือดึงจาก Env)
+    # exchange = ccxt.binance({ ... }) 
     
     while True:
         try:
-            # 1. ดึงราคาจาก Investing.com
-            investing_price = get_investing_price()
-            
-            if investing_price:
-                print(f"💰 ราคา Investing: ${investing_price:,.2f}")
+            # 1. ดึงราคา
+            price = get_investing_price()
+            if price:
+                print(f"💰 Investing Price: ${price:,.2f}")
                 
-                # --- เงื่อนไขการเข้าออเดอร์ (Logic) ---
-                # สมมติเงื่อนไขเดิมของคุณคือเช็ค RSI หรือราคา
-                # ตอนนี้เราใช้ investing_price เป็นตัวตัดสินใจหลักได้เลย
-                
-                # ตัวอย่าง: ถ้าอยากดึง RSI จาก Investing ด้วยจะยากกว่ามาก 
-                # แนะนำให้ใช้ราคาจาก Investing เป็นตัวกรองเทรนด์ 
-                # แล้วใช้ RSI จาก Binance (ที่คำนวณในโค้ดเดิม) เป็นจังหวะเข้าจะเสถียรกว่าครับ
+                # --- ใส่ Logic การเทรดของคุณตรงนี้ ---
+                # if rsi > 70:
+                #     place_smart_tp(...)
                 
             else:
-                print("❌ ไม่ได้ราคาจาก Investing... รอรอบถัดไป")
+                print("⏳ กำลังรอราคา...")
 
-            time.sleep(10) # เช็คราคาทุก 10 วินาที (อย่าถี่มาก เดี๋ยวโดนบล็อก IP)
+            time.sleep(15) # พัก 15 วิ
 
         except Exception as e:
             print(f"Error: {e}")
-            time.sleep(10)
+            time.sleep(15)
 
+# ==========================================
+# 🚀 ส่วนที่ 3: สั่งให้ทำงานพร้อมกัน 2 ระบบ
+# ==========================================
 if __name__ == "__main__":
-    run_bot()
+    # 1. แยกร่างไปรัน Web Server (เพื่อให้ Render ดีใจ)
+    t = Thread(target=run_web_server)
+    t.start()
+
+    # 2. ร่างหลัก รันบอทเทรด
+    run_bot_logic()
