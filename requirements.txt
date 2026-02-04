@@ -1,8 +1,5 @@
-pyTelegramBotAPI
+ccxt
 requests
-schedule
-flask
-pandas
-yfinance
-matplotlib
 beautifulsoup4
+flask
+gunicorn
