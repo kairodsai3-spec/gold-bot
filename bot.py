@@ -10,8 +10,8 @@ from threading import Thread
 # =======================================================
 # ⚙️ CONFIG
 # =======================================================
-TG_TOKEN = os.environ.get('TG_TOKEN', 'ใส่_TOKEN_ถ้าเทสในเครื่อง')
-TG_CHAT_ID = os.environ.get('TG_CHAT_ID', 'ใส่_CHAT_ID')
+TG_TOKEN = os.environ.get('TG_TOKEN', '7628151103')
+TG_CHAT_ID = os.environ.get('TG_CHAT_ID', '8599862112:AAEDAQ3cSIhVyKSX8qGeBLkKA5XDxmEWsy4')
 
 # ตั้งค่า Bot Telegram (Listening Mode)
 bot = telebot.TeleBot(TG_TOKEN)
@@ -109,3 +109,4 @@ if __name__ == "__main__":
 
     # 3. Bot Logic Thread
     run_bot_logic()
+
