@@ -5,3 +5,4 @@ flask
 pandas
 yfinance
 matplotlib
+beautifulsoup4
